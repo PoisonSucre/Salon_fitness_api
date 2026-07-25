@@ -1,4 +1,4 @@
-import { client } from '../config/ligdicash';
+import { createTransaction } from '../services/ligdicashApi';
 import { db } from '../config/firebase';
 import admin from 'firebase-admin';
 import { getSession, removeSession, formatPhone } from './payInitiate';
@@ -20,31 +20,44 @@ export default async function payVerify(req: any, res: any) {
       return res.status(400).json({ error: 'Données de session invalides' });
     }
 
-    const invoice = client.Invoice({
-      currency: 'xof',
-      description: `Achat ${session.energy} énergies`,
-      customer_firstname: '',
-      customer_lastname: '',
-      customer_email: '',
-      store_name: 'Salon du Fitness',
-      store_website_url: '',
-    });
-
-    invoice.addItem({
-      name: `${session.energy} Énergies`,
-      description: `Pack énergie + frais passerelle`,
-      quantity: 1,
-      unit_price: session.amount,
-    });
-
     const callbackUrl = `${process.env.CALLBACK_BASE_URL}/api/callback`;
 
-    const response = await invoice.payWithoutRedirection({
-      otp,
-      customer: formatPhone(session.phone),
-      callback_url: callbackUrl,
-      custom_data: { userId, packId },
-    });
+    const payload = {
+      commande: {
+        invoice: {
+          items: [
+            {
+              name: `${session.energy} Énergies`,
+              description: 'Pack énergie + frais passerelle',
+              quantity: 1,
+              unit_price: session.amount,
+              total_price: session.amount,
+            },
+          ],
+          total_amount: session.amount,
+          devise: 'XOF',
+          description: `Achat ${session.energy} énergies`,
+          customer: formatPhone(session.phone),
+          customer_firstname: '',
+          customer_lastname: '',
+          customer_email: '',
+          external_id: '',
+          otp,
+        },
+        store: {
+          name: 'Salon du Fitness',
+          website_url: '',
+        },
+        actions: {
+          cancel_url: '',
+          return_url: '',
+          callback_url: callbackUrl,
+        },
+        custom_data: { userId, packId },
+      },
+    };
+
+    const response = await createTransaction(payload);
 
     if (response.response_code !== '00') {
       return res.status(400).json({

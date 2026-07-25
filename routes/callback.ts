@@ -1,48 +1,79 @@
-import { client } from '../config/ligdicash';
+import { getTransactionStatus, parseCustomData } from '../services/ligdicashApi';
 import { db } from '../config/firebase';
 import admin from 'firebase-admin';
 import { getPack } from '../utils/packs';
+import { getSession } from './payInitiate';
 
 export default async function callback(req: any, res: any) {
+  const contentType = req.headers['content-type'] || '';
+  console.log(`[callback] Reçu — Content-Type: ${contentType}`);
+  console.log('[callback] Body:', JSON.stringify(req.body));
+
   try {
-    console.log('Callback reçu:', JSON.stringify(req.body));
+    let payload = req.body;
 
-    const { token, status, custom_data } = req.body;
-
-    if (!token) {
-      return res.status(400).send('Token manquant');
+    if (typeof payload === 'string') {
+      try { payload = JSON.parse(payload); } catch { /* form-urlencoded déjà parsé */ }
     }
 
-    const transaction = await client.getTransaction(token, 'payin');
-    console.log('Vérification transaction:', transaction.status);
+    const token = payload.token || '';
+
+    const confirmData = parseCustomData(payload.custom_data);
+    console.log('[callback] custom_data parsé:', JSON.stringify(confirmData));
+
+    const session = getSession(token);
+    const bodyData = payload.custom_data || {};
+
+    const userId = confirmData.userId || session?.userId || (typeof bodyData === 'object' && !Array.isArray(bodyData) ? bodyData.userId : undefined);
+    const packId = confirmData.packId || session?.packId || (typeof bodyData === 'object' && !Array.isArray(bodyData) ? bodyData.packId : undefined);
+    const operator = confirmData.operator || session?.operator || '';
+
+    console.log('[callback] Résolution:', { userId, packId, operator, hasSession: !!session });
+
+    if (!token) {
+      console.warn('[callback] Rejeté: token manquant');
+      return res.status(200).send('Token manquant');
+    }
+
+    const transaction = await getTransactionStatus(token);
+    console.log('[callback] Statut transaction:', transaction.status, '| amount:', transaction.amount);
 
     if (transaction.status !== 'completed') {
+      console.log('[callback] Transaction pas encore complétée, en attente');
       return res.status(200).send('Transaction non complétée');
     }
 
-    const userId = transaction.custom_data?.userId || custom_data?.userId;
-    const packId = transaction.custom_data?.packId || custom_data?.packId;
-    const pack = await getPack(packId);
+    const confirmDataFromApi = parseCustomData(transaction.custom_data);
+    const finalUserId = userId || confirmDataFromApi.userId;
+    const finalPackId = packId || confirmDataFromApi.packId;
 
-    if (!userId || !packId) {
-      return res.status(200).send('userId manquant dans custom_data');
+    if (!finalUserId || !finalPackId) {
+      console.error('[callback] userId/packId manquants:', { finalUserId, finalPackId });
+      return res.status(200).send('userId/packId manquants');
     }
 
-    const userRef = db.collection('participant_energy').doc(userId);
+    const pack = await getPack(finalPackId);
+    if (!pack) {
+      console.error('[callback] Pack invalide:', finalPackId);
+      return res.status(200).send('Pack invalide');
+    }
+
+    const userRef = db.collection('participant_energy').doc(finalUserId);
     const userDoc = await userRef.get();
 
     const transactions = userDoc.exists ? (userDoc.data()?.transactions || []) : [];
     const alreadyProcessed = transactions.some((t: any) => t.token === token);
 
     if (alreadyProcessed) {
+      console.log('[callback] Déjà traité, skip:', token);
       return res.status(200).send('Déjà traité');
     }
 
     const now = new Date();
     const entry = {
       type: 'purchase',
-      packId,
-      energy: pack?.energy || 0,
+      packId: finalPackId,
+      energy: pack.energy,
       amount: transaction.amount,
       token,
       phone: transaction.customer || '',
@@ -52,23 +83,24 @@ export default async function callback(req: any, res: any) {
 
     if (!userDoc.exists) {
       await userRef.set({
-        userId,
-        balance: pack?.energy || 0,
+        userId: finalUserId,
+        balance: pack.energy,
         transactions: [entry],
         createdAt: now,
         updatedAt: now,
       });
     } else {
       await userRef.update({
-        balance: admin.firestore.FieldValue.increment(pack?.energy || 0),
+        balance: admin.firestore.FieldValue.increment(pack.energy),
         transactions: admin.firestore.FieldValue.arrayUnion(entry),
         updatedAt: now,
       });
     }
 
+    console.log(`[callback] Crédité ${pack.energy} énergies à ${finalUserId} (pack: ${finalPackId})`);
     return res.status(200).send('OK');
   } catch (error: any) {
-    console.error('callback error:', error);
-    return res.status(500).send('Erreur interne');
+    console.error('[callback] ERREUR:', error.message, error.stack);
+    return res.status(200).send('Erreur traitée');
   }
 }

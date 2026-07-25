@@ -1,4 +1,4 @@
-import { client } from '../config/ligdicash';
+import { createTransaction } from '../services/ligdicashApi';
 import { getTotalWithFee } from '../utils/packs';
 
 const sessions = new Map<string, SessionData>();
@@ -46,83 +46,75 @@ export default async function payInitiate(req: any, res: any) {
     }
 
     const customer = formatPhone(phone);
-
-    const invoice = client.Invoice({
-      currency: 'xof',
-      description: `Achat ${pack.energy} énergies`,
-      customer_firstname: '',
-      customer_lastname: '',
-      customer_email: '',
-      store_name: 'Salon du Fitness',
-      store_website_url: '',
-    });
-
-    invoice.addItem({
-      name: `${pack.energy} Énergies`,
-      description: `Pack énergie + frais passerelle`,
-      quantity: 1,
-      unit_price: pack.total,
-    });
-
     const callbackUrl = `${process.env.CALLBACK_BASE_URL}/api/callback`;
 
-    if (operator === 'orange' || operator === 'moov') {
-      const response = await invoice.payWithoutRedirection({
-        otp: operator === 'orange' ? otp : '',
-        customer,
-        callback_url: callbackUrl,
-        custom_data: { userId, packId, operator },
-      });
+    const otpValue = operator === 'orange' ? (otp || '') : '';
+    const op = operator === 'orange' || operator === 'moov' ? operator : 'ligdicash';
 
-      if (response.response_code !== '00') {
-        return res.status(400).json({
-          error: operator === 'orange' ? 'Code OTP incorrect ou expiré' : "Erreur lors de l'envoi du paiement",
-          details: response,
-        });
-      }
+    const payload = {
+      commande: {
+        invoice: {
+          items: [
+            {
+              name: `${pack.energy} Énergies`,
+              description: 'Pack énergie + frais passerelle',
+              quantity: 1,
+              unit_price: pack.total,
+              total_price: pack.total,
+            },
+          ],
+          total_amount: pack.total,
+          devise: 'XOF',
+          description: `Achat ${pack.energy} énergies`,
+          customer,
+          customer_firstname: '',
+          customer_lastname: '',
+          customer_email: '',
+          external_id: '',
+          otp: otpValue,
+        },
+        store: {
+          name: 'Salon du Fitness',
+          website_url: '',
+        },
+        actions: {
+          cancel_url: '',
+          return_url: '',
+          callback_url: callbackUrl,
+        },
+        custom_data: { userId, packId, operator: op },
+      },
+    };
 
-      const token = response.token;
-      sessions.set(token, {
-        token, userId, packId, phone, operator,
-        energy: pack.energy, amount: pack.total, createdAt: Date.now(),
-      });
-      setTimeout(() => removeSession(token), 5 * 60 * 1000);
-
-      return res.json({
-        token,
-        message: operator === 'orange'
-          ? 'Paiement en cours de traitement'
-          : 'Validez le paiement sur votre téléphone',
-        status: 'pending',
-        expiresIn: 300,
-      });
-    }
-
-    const response = await invoice.payWithoutRedirection({
-      otp: otp || '',
-      customer,
-      callback_url: callbackUrl,
-      custom_data: { userId, packId, operator: operator || 'unknown' },
-    });
+    const response = await createTransaction(payload);
 
     if (response.response_code !== '00') {
-      return res.status(400).json({ error: "Erreur lors de l'envoi de l'OTP", details: response });
+      const errorMsg = operator === 'orange'
+        ? 'Code OTP incorrect ou expiré'
+        : "Erreur lors de l'envoi du paiement";
+      return res.status(400).json({ error: errorMsg, details: response });
     }
 
     const token = response.token;
     sessions.set(token, {
-      token, userId, packId, phone, operator: operator || 'ligdicash',
+      token, userId, packId, phone, operator: op,
       energy: pack.energy, amount: pack.total, createdAt: Date.now(),
     });
     setTimeout(() => removeSession(token), 5 * 60 * 1000);
 
-    return res.json({
-      token,
-      message: 'Code OTP envoyé par SMS',
-      expiresIn: 300,
-    });
+    const message = operator === 'orange'
+      ? 'Paiement en cours de traitement'
+      : operator === 'moov'
+        ? 'Validez le paiement sur votre téléphone'
+        : 'Code OTP envoyé par SMS';
+
+    return res.json({ token, message, status: 'pending', expiresIn: 300 });
   } catch (error: any) {
-    console.error('payInitiate error:', error);
+    if (error instanceof SyntaxError) {
+      console.error('payInitiate error: JSON parse error - API returned non-JSON. Check LigdiCash API key/token and network.');
+    } else {
+      console.error('payInitiate error:', error.name, error.message);
+    }
     return res.status(500).json({ error: 'Erreur serveur', details: error.message });
   }
 }
