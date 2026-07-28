@@ -9,7 +9,7 @@ export interface SessionData {
   packId: string;
   phone: string;
   operator: string;
-  energy: number;
+  flammes: number;
   amount: number;
   createdAt: number;
 }
@@ -56,8 +56,8 @@ export default async function payInitiate(req: any, res: any) {
         invoice: {
           items: [
             {
-              name: `${pack.energy} Énergies`,
-              description: 'Pack énergie + frais passerelle',
+              name: `${pack.flammes} Flammes`,
+              description: 'Pack flammes + frais passerelle',
               quantity: 1,
               unit_price: pack.total,
               total_price: pack.total,
@@ -65,7 +65,7 @@ export default async function payInitiate(req: any, res: any) {
           ],
           total_amount: pack.total,
           devise: 'XOF',
-          description: `Achat ${pack.energy} énergies`,
+          description: `Achat ${pack.flammes} flammes`,
           customer,
           customer_firstname: '',
           customer_lastname: '',
@@ -98,7 +98,7 @@ export default async function payInitiate(req: any, res: any) {
     const token = response.token;
     sessions.set(token, {
       token, userId, packId, phone, operator: op,
-      energy: pack.energy, amount: pack.total, createdAt: Date.now(),
+      flammes: pack.flammes, amount: pack.total, createdAt: Date.now(),
     });
     setTimeout(() => removeSession(token), 5 * 60 * 1000);
 

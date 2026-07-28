@@ -27,8 +27,8 @@ export default async function payVerify(req: any, res: any) {
         invoice: {
           items: [
             {
-              name: `${session.energy} Énergies`,
-              description: 'Pack énergie + frais passerelle',
+              name: `${session.flammes} Flammes`,
+              description: 'Pack flammes + frais passerelle',
               quantity: 1,
               unit_price: session.amount,
               total_price: session.amount,
@@ -36,7 +36,7 @@ export default async function payVerify(req: any, res: any) {
           ],
           total_amount: session.amount,
           devise: 'XOF',
-          description: `Achat ${session.energy} énergies`,
+          description: `Achat ${session.flammes} flammes`,
           customer: formatPhone(session.phone),
           customer_firstname: '',
           customer_lastname: '',
@@ -74,7 +74,7 @@ export default async function payVerify(req: any, res: any) {
     const transactionEntry = {
       type: 'purchase',
       packId,
-      energy: session.energy,
+      energy: session.flammes,
       amount: session.amount,
       token,
       phone: session.phone,
@@ -84,14 +84,14 @@ export default async function payVerify(req: any, res: any) {
     if (!userDoc.exists) {
       await userRef.set({
         userId,
-        balance: session.energy,
+        balance: session.flammes,
         transactions: [transactionEntry],
         createdAt: now,
         updatedAt: now,
       });
     } else {
       await userRef.update({
-        balance: admin.firestore.FieldValue.increment(session.energy),
+        balance: admin.firestore.FieldValue.increment(session.flammes),
         transactions: admin.firestore.FieldValue.arrayUnion(transactionEntry),
         updatedAt: now,
       });
@@ -101,7 +101,7 @@ export default async function payVerify(req: any, res: any) {
 
     return res.json({
       status: 'completed',
-      energy: session.energy,
+      flammes: session.flammes,
       transactionId: token,
     });
   } catch (error: any) {

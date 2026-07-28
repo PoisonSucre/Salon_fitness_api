@@ -3,7 +3,7 @@ import admin from 'firebase-admin';
 
 export interface Pack {
   id: string;
-  energy: number;
+  flammes: number;
   price: number;
   popular?: boolean;
   order?: number;
@@ -18,9 +18,9 @@ export interface PackWithFee extends Pack {
 export const DEFAULT_GATEWAY_FEE_RATE = 0.015;
 
 const DEFAULT_PACKS: Record<string, Pack> = {
-  small: { id: 'small', energy: 20, price: 10 },
-  medium: { id: 'medium', energy: 60, price: 10, popular: true },
-  large: { id: 'large', energy: 150, price: 10 },
+  small: { id: 'small', flammes: 20, price: 10 },
+  medium: { id: 'medium', flammes: 60, price: 10, popular: true },
+  large: { id: 'large', flammes: 150, price: 10 },
 };
 
 async function getPacksFromFirestore(): Promise<Record<string, Pack> | null> {

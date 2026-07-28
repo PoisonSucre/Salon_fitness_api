@@ -45,14 +45,14 @@ export default async function confirm(req: any, res: any) {
 
     if (alreadyProcessed) {
       console.log('[confirm] Déjà traité:', token);
-      return res.json({ status: 'completed', credited: true, energy: pack.energy, message: 'Déjà traité' });
+      return res.json({ status: 'completed', credited: true, flammes: pack.flammes, message: 'Déjà traité' });
     }
 
     const now = new Date();
     const entry = {
       type: 'purchase',
       packId,
-      energy: pack.energy,
+      energy: pack.flammes,
       amount: transaction.amount,
       token,
       phone: transaction.customer || '',
@@ -64,21 +64,21 @@ export default async function confirm(req: any, res: any) {
     if (!userDoc.exists) {
       await userRef.set({
         userId: creditedUserId,
-        balance: pack.energy,
+        balance: pack.flammes,
         transactions: [entry],
         createdAt: now,
         updatedAt: now,
       });
     } else {
       await userRef.update({
-        balance: admin.firestore.FieldValue.increment(pack.energy),
+        balance: admin.firestore.FieldValue.increment(pack.flammes),
         transactions: admin.firestore.FieldValue.arrayUnion(entry),
         updatedAt: now,
       });
     }
 
-    console.log(`[confirm] Crédité ${pack.energy} énergies à ${creditedUserId} via polling`);
-    return res.json({ status: 'completed', credited: true, energy: pack.energy });
+    console.log(`[confirm] Crédité ${pack.flammes} flammes à ${creditedUserId} via polling`);
+    return res.json({ status: 'completed', credited: true, flammes: pack.flammes });
   } catch (error: any) {
     console.error('[confirm] ERREUR:', error.message);
     return res.status(500).json({ error: 'Erreur serveur', details: error.message });

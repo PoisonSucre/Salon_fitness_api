@@ -73,7 +73,7 @@ export default async function callback(req: any, res: any) {
     const entry = {
       type: 'purchase',
       packId: finalPackId,
-      energy: pack.energy,
+      energy: pack.flammes,
       amount: transaction.amount,
       token,
       phone: transaction.customer || '',
@@ -84,20 +84,20 @@ export default async function callback(req: any, res: any) {
     if (!userDoc.exists) {
       await userRef.set({
         userId: finalUserId,
-        balance: pack.energy,
+        balance: pack.flammes,
         transactions: [entry],
         createdAt: now,
         updatedAt: now,
       });
     } else {
       await userRef.update({
-        balance: admin.firestore.FieldValue.increment(pack.energy),
+        balance: admin.firestore.FieldValue.increment(pack.flammes),
         transactions: admin.firestore.FieldValue.arrayUnion(entry),
         updatedAt: now,
       });
     }
 
-    console.log(`[callback] Crédité ${pack.energy} énergies à ${finalUserId} (pack: ${finalPackId})`);
+    console.log(`[callback] Crédité ${pack.flammes} flammes à ${finalUserId} (pack: ${finalPackId})`);
     return res.status(200).send('OK');
   } catch (error: any) {
     console.error('[callback] ERREUR:', error.message, error.stack);
