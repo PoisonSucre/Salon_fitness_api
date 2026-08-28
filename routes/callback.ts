@@ -3,6 +3,7 @@ import { db } from '../config/firebase';
 import admin from 'firebase-admin';
 import { getPack } from '../utils/packs';
 import { getSession } from './payInitiate';
+import pushService from '../services/pushService';
 
 export default async function callback(req: any, res: any) {
   const contentType = req.headers['content-type'] || '';
@@ -16,7 +17,7 @@ export default async function callback(req: any, res: any) {
       try { payload = JSON.parse(payload); } catch { /* form-urlencoded déjà parsé */ }
     }
 
-    const token = payload.token || '';
+    const token = payload.token || payload.invoice_token || '';
 
     const confirmData = parseCustomData(payload.custom_data);
     console.log('[callback] custom_data parsé:', JSON.stringify(confirmData));
@@ -59,45 +60,62 @@ export default async function callback(req: any, res: any) {
     }
 
     const userRef = db.collection('participant_energy').doc(finalUserId);
-    const userDoc = await userRef.get();
+    let newlyCredited = false;
 
-    const transactions = userDoc.exists ? (userDoc.data()?.transactions || []) : [];
-    const alreadyProcessed = transactions.some((t: any) => t.token === token);
+    // Transaction atomique ACID
+    await db.runTransaction(async (t) => {
+      const userSnap = await t.get(userRef);
+      const transactions = userSnap.exists ? (userSnap.data()?.transactions || []) : [];
+      const alreadyProcessed = transactions.some((item: any) => item.token === token);
 
-    if (alreadyProcessed) {
-      console.log('[callback] Déjà traité, skip:', token);
-      return res.status(200).send('Déjà traité');
-    }
+      if (alreadyProcessed) {
+        return;
+      }
 
-    const now = new Date();
-    const entry = {
-      type: 'purchase',
-      packId: finalPackId,
-      energy: pack.flammes,
-      amount: transaction.amount,
-      token,
-      phone: transaction.customer || '',
-      callbackVerified: true,
-      createdAt: now,
-    };
-
-    if (!userDoc.exists) {
-      await userRef.set({
-        userId: finalUserId,
-        balance: pack.flammes,
-        transactions: [entry],
+      const now = new Date();
+      const entry = {
+        type: 'purchase',
+        packId: finalPackId,
+        energy: pack.flammes,
+        amount: transaction.amount,
+        token,
+        phone: transaction.customer || '',
+        callbackVerified: true,
         createdAt: now,
-        updatedAt: now,
-      });
+      };
+
+      if (!userSnap.exists) {
+        t.set(userRef, {
+          userId: finalUserId,
+          balance: pack.flammes,
+          transactions: [entry],
+          createdAt: now,
+          updatedAt: now,
+        });
+      } else {
+        t.update(userRef, {
+          balance: admin.firestore.FieldValue.increment(pack.flammes),
+          transactions: admin.firestore.FieldValue.arrayUnion(entry),
+          updatedAt: now,
+        });
+      }
+      newlyCredited = true;
+    });
+
+    if (newlyCredited) {
+      console.log(`[callback] Crédité ${pack.flammes} flammes à ${finalUserId} (pack: ${finalPackId})`);
+
+      // Envoi de la notification push au client
+      pushService.sendPushToUser(
+        finalUserId,
+        'Paiement validé ! 🔥',
+        `Votre compte a été crédité de ${pack.flammes} Flammes (${transaction.amount || ''} FCFA).`,
+        { type: 'energy_purchased', flammes: pack.flammes, amount: transaction.amount, packId: finalPackId }
+      ).catch((e) => console.error('Erreur push callback:', e));
     } else {
-      await userRef.update({
-        balance: admin.firestore.FieldValue.increment(pack.flammes),
-        transactions: admin.firestore.FieldValue.arrayUnion(entry),
-        updatedAt: now,
-      });
+      console.log('[callback] Déjà traité, skip:', token);
     }
 
-    console.log(`[callback] Crédité ${pack.flammes} flammes à ${finalUserId} (pack: ${finalPackId})`);
     return res.status(200).send('OK');
   } catch (error: any) {
     console.error('[callback] ERREUR:', error.message, error.stack);

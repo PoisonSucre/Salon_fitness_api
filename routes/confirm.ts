@@ -3,6 +3,7 @@ import { db } from '../config/firebase';
 import admin from 'firebase-admin';
 import { getPack } from '../utils/packs';
 import { getSession } from './payInitiate';
+import pushService from '../services/pushService';
 
 export default async function confirm(req: any, res: any) {
   try {
@@ -38,46 +39,63 @@ export default async function confirm(req: any, res: any) {
     }
 
     const userRef = db.collection('participant_energy').doc(creditedUserId);
-    const userDoc = await userRef.get();
+    let newlyCredited = false;
 
-    const transactions = userDoc.exists ? (userDoc.data()?.transactions || []) : [];
-    const alreadyProcessed = transactions.some((t: any) => t.token === token);
+    // Transaction atomique ACID pour éviter tout doublon
+    await db.runTransaction(async (t) => {
+      const userSnap = await t.get(userRef);
+      const transactions = userSnap.exists ? (userSnap.data()?.transactions || []) : [];
+      const alreadyProcessed = transactions.some((item: any) => item.token === token);
 
-    if (alreadyProcessed) {
-      console.log('[confirm] Déjà traité:', token);
-      return res.json({ status: 'completed', credited: true, flammes: pack.flammes, message: 'Déjà traité' });
-    }
+      if (alreadyProcessed) {
+        return;
+      }
 
-    const now = new Date();
-    const entry = {
-      type: 'purchase',
-      packId,
-      energy: pack.flammes,
-      amount: transaction.amount,
-      token,
-      phone: transaction.customer || '',
-      callbackVerified: false,
-      pollVerified: true,
-      createdAt: now,
-    };
-
-    if (!userDoc.exists) {
-      await userRef.set({
-        userId: creditedUserId,
-        balance: pack.flammes,
-        transactions: [entry],
+      const now = new Date();
+      const entry = {
+        type: 'purchase',
+        packId,
+        energy: pack.flammes,
+        amount: transaction.amount,
+        token,
+        phone: transaction.customer || '',
+        callbackVerified: false,
+        pollVerified: true,
         createdAt: now,
-        updatedAt: now,
-      });
+      };
+
+      if (!userSnap.exists) {
+        t.set(userRef, {
+          userId: creditedUserId,
+          balance: pack.flammes,
+          transactions: [entry],
+          createdAt: now,
+          updatedAt: now,
+        });
+      } else {
+        t.update(userRef, {
+          balance: admin.firestore.FieldValue.increment(pack.flammes),
+          transactions: admin.firestore.FieldValue.arrayUnion(entry),
+          updatedAt: now,
+        });
+      }
+      newlyCredited = true;
+    });
+
+    if (newlyCredited) {
+      console.log(`[confirm] Crédité ${pack.flammes} flammes à ${creditedUserId} via polling`);
+
+      // Envoi de la notification push
+      pushService.sendPushToUser(
+        creditedUserId,
+        'Paiement validé ! 🔥',
+        `Votre compte a été crédité de ${pack.flammes} Flammes (${transaction.amount || ''} FCFA).`,
+        { type: 'energy_purchased', flammes: pack.flammes, amount: transaction.amount, packId }
+      ).catch((e) => console.error('Erreur push confirm:', e));
     } else {
-      await userRef.update({
-        balance: admin.firestore.FieldValue.increment(pack.flammes),
-        transactions: admin.firestore.FieldValue.arrayUnion(entry),
-        updatedAt: now,
-      });
+      console.log('[confirm] Déjà traité:', token);
     }
 
-    console.log(`[confirm] Crédité ${pack.flammes} flammes à ${creditedUserId} via polling`);
     return res.json({ status: 'completed', credited: true, flammes: pack.flammes });
   } catch (error: any) {
     console.error('[confirm] ERREUR:', error.message);

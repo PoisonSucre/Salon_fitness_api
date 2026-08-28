@@ -1,4 +1,4 @@
-import { createTransaction } from '../services/ligdicashApi';
+import { createTransaction, sendWalletOtp } from '../services/ligdicashApi';
 import { getTotalWithFee } from '../utils/packs';
 
 const sessions = new Map<string, SessionData>();
@@ -46,10 +46,53 @@ export default async function payInitiate(req: any, res: any) {
     }
 
     const customer = formatPhone(phone);
-    const callbackUrl = `${process.env.CALLBACK_BASE_URL}/api/callback`;
-
-    const otpValue = operator === 'orange' ? (otp || '') : '';
     const op = operator === 'orange' || operator === 'moov' ? operator : 'ligdicash';
+
+    // Règle Moov Money : minimum 100 FCFA imposé par LigdiCash / Moov
+    if (op === 'moov' && pack.total < 100) {
+      return res.status(400).json({
+        error: 'Le montant minimum pour Moov Money est de 100 FCFA',
+        minAmount: 100,
+        currentAmount: pack.total,
+      });
+    }
+
+    // FLUX 1 : Wallet LigdiCash (API V2 debitotp)
+    if (op === 'ligdicash') {
+      const otpResponse = await sendWalletOtp(customer, pack.total);
+
+      if (otpResponse.error === true || (otpResponse.error !== false && otpResponse.response_code && otpResponse.response_code !== '00')) {
+        return res.status(400).json({
+          error: otpResponse.message || otpResponse.response_text || "Échec de l'envoi du code OTP LigdiCash",
+          details: otpResponse,
+        });
+      }
+
+      // Création d'un token de session local pour l'étape 2 (vérification OTP)
+      const sessionToken = `wallet_${userId}_${Date.now()}`;
+      sessions.set(sessionToken, {
+        token: sessionToken,
+        userId,
+        packId,
+        phone,
+        operator: 'ligdicash',
+        flammes: pack.flammes,
+        amount: pack.total,
+        createdAt: Date.now(),
+      });
+      setTimeout(() => removeSession(sessionToken), 10 * 60 * 1000);
+
+      return res.json({
+        token: sessionToken,
+        message: 'Code OTP envoyé par SMS / application LigdiCash',
+        status: 'pending',
+        expiresIn: 600,
+      });
+    }
+
+    // FLUX 2 : Mobile Money direct (Orange Money avec OTP ou Moov Money avec push USSD)
+    const callbackUrl = `${process.env.CALLBACK_BASE_URL || 'http://localhost:3000'}/api/callback`;
+    const otpValue = op === 'orange' ? (otp || '') : '';
 
     const payload = {
       commande: {
@@ -89,32 +132,32 @@ export default async function payInitiate(req: any, res: any) {
     const response = await createTransaction(payload);
 
     if (response.response_code !== '00') {
-      const errorMsg = operator === 'orange'
-        ? 'Code OTP incorrect ou expiré'
-        : "Erreur lors de l'envoi du paiement";
+      const errorMsg = op === 'orange'
+        ? (response.response_text || 'Code OTP incorrect ou expiré')
+        : (response.response_text || "Erreur lors de l'envoi du paiement");
       return res.status(400).json({ error: errorMsg, details: response });
     }
 
     const token = response.token;
     sessions.set(token, {
-      token, userId, packId, phone, operator: op,
-      flammes: pack.flammes, amount: pack.total, createdAt: Date.now(),
+      token,
+      userId,
+      packId,
+      phone,
+      operator: op,
+      flammes: pack.flammes,
+      amount: pack.total,
+      createdAt: Date.now(),
     });
-    setTimeout(() => removeSession(token), 5 * 60 * 1000);
+    setTimeout(() => removeSession(token), 10 * 60 * 1000);
 
-    const message = operator === 'orange'
+    const message = op === 'orange'
       ? 'Paiement en cours de traitement'
-      : operator === 'moov'
-        ? 'Validez le paiement sur votre téléphone'
-        : 'Code OTP envoyé par SMS';
+      : 'Validez le paiement sur votre téléphone (*155# ou popup)';
 
-    return res.json({ token, message, status: 'pending', expiresIn: 300 });
+    return res.json({ token, message, status: 'pending', expiresIn: 600 });
   } catch (error: any) {
-    if (error instanceof SyntaxError) {
-      console.error('payInitiate error: JSON parse error - API returned non-JSON. Check LigdiCash API key/token and network.');
-    } else {
-      console.error('payInitiate error:', error.name, error.message);
-    }
+    console.error('payInitiate error:', error);
     return res.status(500).json({ error: 'Erreur serveur', details: error.message });
   }
 }
