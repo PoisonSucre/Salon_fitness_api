@@ -211,6 +211,16 @@ participant_energy/{userId}
 users/{uid}
 ├── pushToken / expoPushToken: string   # Token Expo pour les push
 └── role: string                         # "admin" | "coach" | "participant"
+
+callback_logs/{autoId}                   # Traçabilité des callbacks (tests validation)
+├── receivedAt: Date
+├── method: string
+├── ip: string
+├── contentType: string
+├── headers: object
+├── body: object                         # Payload brut reçu
+├── outcome: string                      # "credited" | "already_processed" | "rejected_*" | "transaction_*" | "error_*"
+└── respondedAt: Date
 ```
 
 ## Déploiement

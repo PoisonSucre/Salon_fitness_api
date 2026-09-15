@@ -10,6 +10,29 @@ export default async function callback(req: any, res: any) {
   console.log(`[callback] Reçu — Content-Type: ${contentType}`);
   console.log('[callback] Body:', JSON.stringify(req.body));
 
+  // Traçabilité : persister chaque requête reçue dans Firestore
+  // (collection callback_logs) pour les tests de validation LigdiCash
+  const logRef = db.collection('callback_logs').doc();
+  try {
+    await logRef.set({
+      receivedAt: new Date(),
+      method: req.method,
+      ip: req.ip || req.headers['x-forwarded-for'] || '',
+      contentType,
+      headers: req.headers,
+      body: req.body ?? null,
+      outcome: 'processing',
+    });
+  } catch (logErr: any) {
+    console.error('[callback] Échec log Firestore:', logErr.message);
+  }
+
+  const finish = async (outcome: string, httpBody: string) => {
+    logRef.update({ outcome, respondedAt: new Date() })
+      .catch((e) => console.error('[callback] Échec update log:', e.message));
+    return res.status(200).send(httpBody);
+  };
+
   try {
     let payload = req.body;
 
@@ -33,7 +56,7 @@ export default async function callback(req: any, res: any) {
 
     if (!token) {
       console.warn('[callback] Rejeté: token manquant');
-      return res.status(200).send('Token manquant');
+      return finish('rejected_no_token', 'Token manquant');
     }
 
     const transaction = await getTransactionStatus(token);
@@ -41,7 +64,7 @@ export default async function callback(req: any, res: any) {
 
     if (transaction.status !== 'completed') {
       console.log('[callback] Transaction pas encore complétée, en attente');
-      return res.status(200).send('Transaction non complétée');
+      return finish(`transaction_${transaction.status || 'unknown'}`, 'Transaction non complétée');
     }
 
     const confirmDataFromApi = parseCustomData(transaction.custom_data);
@@ -50,13 +73,13 @@ export default async function callback(req: any, res: any) {
 
     if (!finalUserId || !finalPackId) {
       console.error('[callback] userId/packId manquants:', { finalUserId, finalPackId });
-      return res.status(200).send('userId/packId manquants');
+      return finish('rejected_missing_ids', 'userId/packId manquants');
     }
 
     const pack = await getPack(finalPackId);
     if (!pack) {
       console.error('[callback] Pack invalide:', finalPackId);
-      return res.status(200).send('Pack invalide');
+      return finish('rejected_invalid_pack', 'Pack invalide');
     }
 
     const userRef = db.collection('participant_energy').doc(finalUserId);
@@ -116,9 +139,9 @@ export default async function callback(req: any, res: any) {
       console.log('[callback] Déjà traité, skip:', token);
     }
 
-    return res.status(200).send('OK');
+    return finish(newlyCredited ? 'credited' : 'already_processed', 'OK');
   } catch (error: any) {
     console.error('[callback] ERREUR:', error.message, error.stack);
-    return res.status(200).send('Erreur traitée');
+    return finish(`error_${error.message || 'unknown'}`, 'Erreur traitée');
   }
 }
