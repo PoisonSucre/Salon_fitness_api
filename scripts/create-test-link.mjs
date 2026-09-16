@@ -80,7 +80,7 @@ const data = await response.json();
 console.log('Réponse LigdiCash:', JSON.stringify(data, null, 2));
 
 if (data.response_code === '00' && data.token) {
-  const paymentUrl = `${BASE_URL}/pay/v01/redirect/checkout-invoice/?invoiceToken=${data.token}`;
+  const paymentUrl = data.response_text || `${BASE_URL}/pay/v01/redirect/checkout-invoice/?invoiceToken=${data.token}`;
   console.log('\n════════════════════════════════════════════════');
   console.log('✅ LIEN DE PAIEMENT GÉNÉRÉ');
   console.log('════════════════════════════════════════════════');
